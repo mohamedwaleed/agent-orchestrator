@@ -1,0 +1,3 @@
+# Adapters distributed as NPM packages with auto-discovery
+
+Adapters are distributed as separate NPM packages following the naming convention `@orchestrator/adapter-<name>`. The orchestrator auto-discovers installed adapter packages in `node_modules` — no explicit registration required. We chose this over built-in adapters (which don't fulfill the extensibility promise) and explicit registration (which adds unnecessary setup friction). This follows the proven plugin model used by Babel, ESLint, and other Node.js ecosystem tools. The naming convention is the contract: any package matching `@orchestrator/adapter-*` is discovered and loaded automatically.

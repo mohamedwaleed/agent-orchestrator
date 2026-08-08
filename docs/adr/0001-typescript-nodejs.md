@@ -1,0 +1,3 @@
+# TypeScript / Node.js as the implementation language
+
+The orchestrator is built in TypeScript on Node.js. We chose it over Python and Go because the tool orchestrates CLI-based agents (Devin CLI, Codex CLI), and TypeScript has the strongest CLI tooling ecosystem, an async model that maps cleanly to parallel session management, and is the lingua franca for adapter authors who are already building CLI-based tools. Go was attractive for single-binary distribution and goroutines but creates friction for adapter contributors. Python is strong in the AI ecosystem but weaker for CLI tooling and distribution.

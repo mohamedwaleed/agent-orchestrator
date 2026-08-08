@@ -1,0 +1,23 @@
+{
+  "name": "@orchestrator/tui",
+  "version": "0.1.0",
+  "description": "Terminal UI dashboard for the Agent Orchestrator — built with Ink (React for CLIs).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@orchestrator/types": "workspace:*",
+    "ink": "^5.0.0",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0"
+  }
+}

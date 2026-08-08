@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(devin)",
+      "Exec(git init)",
+      "Exec(git branch)",
+      "Exec(pnpm)",
+      "Exec(find)",
+      "Exec(git remote)",
+      "Exec(gh repo)",
+      "Exec(git status)",
+      "Exec(git add)"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@orchestrator/adapter-codex",
+  "version": "0.1.0",
+  "description": "Codex adapter for the Agent Orchestrator — interfaces with Codex CLI via subprocess.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@orchestrator/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

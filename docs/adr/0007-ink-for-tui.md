@@ -1,0 +1,3 @@
+# Ink (React for CLIs) for the TUI Dashboard
+
+The Dashboard TUI is built with Ink, the React-based terminal UI framework. We chose Ink over blessed/neo-blessed because the Dashboard is a stateful, real-time UI — multiple sessions updating simultaneously, streaming logs, status changes, and user selection. React's component model and hooks map naturally to this: each session is a component, the dashboard is a list of session components, state updates trigger re-renders. Ink is the de facto standard for React-based CLIs in TypeScript, has strong TypeScript support, and is battle-tested by GitHub CLI, Cloudflare Wrangler, and others. blessed would require building a component model from scratch for a complex dashboard.

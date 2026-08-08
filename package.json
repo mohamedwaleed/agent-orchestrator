@@ -1,0 +1,19 @@
+{
+  "name": "agent-orchestrator",
+  "private": true,
+  "description": "A local coding agent orchestration tool that takes tickets, assigns them to parallel waves, runs agents in isolated worktrees, and produces a PR per task.",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

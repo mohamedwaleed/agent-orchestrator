@@ -1,0 +1,16 @@
+{
+  "name": "@orchestrator/types",
+  "version": "0.1.0",
+  "description": "Shared types for the Agent Orchestrator — adapter contract, ticket, task, plan, and run state types.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
