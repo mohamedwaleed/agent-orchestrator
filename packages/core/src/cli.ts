@@ -9,6 +9,40 @@ import { ConfigLoader } from "./config/config-loader.js";
 import type { OrchestratorConfig } from "@orchestrator/types";
 
 /**
+ * NoPrGitOperations — wraps RealGitOperations but skips commit, push, PR, and merge.
+ * Used with --no-pr to test execution (worktree creation, adapter sessions) without
+ * creating real PRs. Worktree creation and cleanup still run.
+ */
+class NoPrGitOperations implements GitOperations {
+  constructor(private inner: GitOperations) {}
+
+  async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
+    await this.inner.createWorktree(branchName, worktreePath, baseBranch);
+  }
+
+  async commitAll(_worktreePath: string, _message: string): Promise<void> {
+    console.log("  [--no-pr] skipping commit");
+  }
+
+  async push(_worktreePath: string, _branchName: string): Promise<void> {
+    console.log("  [--no-pr] skipping push");
+  }
+
+  async createPR(_title: string, _body: string, _baseBranch: string, _headBranch: string): Promise<{ url: string; number: number }> {
+    console.log("  [--no-pr] skipping PR creation");
+    return { url: "(skipped)", number: 0 };
+  }
+
+  async mergePR(_prUrl: string): Promise<void> {
+    console.log("  [--no-pr] skipping PR merge");
+  }
+
+  async removeWorktree(worktreePath: string): Promise<void> {
+    await this.inner.removeWorktree(worktreePath);
+  }
+}
+
+/**
  * CLI entry point for the Agent Orchestrator.
  *
  * Usage:
@@ -217,37 +251,3 @@ main().catch((err) => {
   console.error("Error:", err.message);
   process.exit(1);
 });
-
-/**
- * NoPrGitOperations — wraps RealGitOperations but skips commit, push, PR, and merge.
- * Used with --no-pr to test execution (worktree creation, adapter sessions) without
- * creating real PRs. Worktree creation and cleanup still run.
- */
-class NoPrGitOperations implements GitOperations {
-  constructor(private inner: GitOperations) {}
-
-  async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
-    await this.inner.createWorktree(branchName, worktreePath, baseBranch);
-  }
-
-  async commitAll(_worktreePath: string, _message: string): Promise<void> {
-    console.log("  [--no-pr] skipping commit");
-  }
-
-  async push(_worktreePath: string, _branchName: string): Promise<void> {
-    console.log("  [--no-pr] skipping push");
-  }
-
-  async createPR(_title: string, _body: string, _baseBranch: string, _headBranch: string): Promise<{ url: string; number: number }> {
-    console.log("  [--no-pr] skipping PR creation");
-    return { url: "(skipped)", number: 0 };
-  }
-
-  async mergePR(_prUrl: string): Promise<void> {
-    console.log("  [--no-pr] skipping PR merge");
-  }
-
-  async removeWorktree(worktreePath: string): Promise<void> {
-    await this.inner.removeWorktree(worktreePath);
-  }
-}
