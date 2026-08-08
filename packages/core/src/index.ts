@@ -4,7 +4,7 @@ export { WaveExecutor } from "./execution/wave-executor.js";
 export { RealGitOperations } from "./execution/real-git-operations.js";
 export type { GitOperations } from "./execution/git-operations.js";
 export { GitHubTicketSource, LocalTicketSource } from "./ticket-source/index.js";
-export type { TicketSource } from "./ticket-source/ticket-source.js";
+export type { TicketSource, CommandRunner } from "./ticket-source/index.js";
 export { AdapterRegistry } from "./adapter-registry/registry.js";
 export { StubAdapter } from "./adapter-registry/stub-adapter.js";
 export { RunStateManager } from "./state/run-state-manager.js";
