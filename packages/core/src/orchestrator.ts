@@ -1,14 +1,20 @@
-import type { RunState, Plan, Task, Ticket } from "@orchestrator/types";
+import type { RunState, Plan, Task, Ticket, Adapter } from "@orchestrator/types";
 import { Planner } from "./planner/planner.js";
 import { WaveExecutor } from "./execution/wave-executor.js";
 import { AdapterRegistry } from "./adapter-registry/registry.js";
 import { RunStateManager } from "./state/run-state-manager.js";
 import type { OrchestratorConfig } from "./config/config-loader.js";
 import type { TicketSource } from "./ticket-source/ticket-source.js";
+import type { GitOperations } from "./execution/git-operations.js";
 
 /**
  * The Orchestrator — coordinates the full Run lifecycle:
  * Intake → Planning → Approval Gate → Execution → Completion → Intervention
+ *
+ * All external dependencies are injected for testability:
+ * - ticketSource: where tickets come from (GitHub, local, or fake)
+ * - gitOps: git/gh operations (real or fake)
+ * - adapters: agent adapters (real or stub)
  */
 export class Orchestrator {
   private stateManager: RunStateManager;
@@ -19,12 +25,17 @@ export class Orchestrator {
   constructor(
     config: OrchestratorConfig,
     private ticketSource: TicketSource,
+    gitOps: GitOperations,
+    adapters: Adapter[],
     stateDbPath: string,
   ) {
     this.stateManager = new RunStateManager(stateDbPath);
     this.planner = new Planner(config);
     this.adapterRegistry = new AdapterRegistry();
-    this.waveExecutor = new WaveExecutor(this.adapterRegistry, this.stateManager, config);
+    for (const adapter of adapters) {
+      this.adapterRegistry.register(adapter);
+    }
+    this.waveExecutor = new WaveExecutor(this.adapterRegistry, this.stateManager, config, gitOps);
   }
 
   /**

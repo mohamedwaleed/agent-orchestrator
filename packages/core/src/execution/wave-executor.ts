@@ -2,11 +2,7 @@ import type { RunState, Task, AdapterResult } from "@orchestrator/types";
 import type { AdapterRegistry } from "../adapter-registry/registry.js";
 import type { RunStateManager } from "../state/run-state-manager.js";
 import type { OrchestratorConfig } from "../config/config-loader.js";
-import { exec as execChildProcess } from "node:child_process";
-import { promisify } from "node:util";
-import { join } from "node:path";
-
-const exec = promisify(execChildProcess);
+import type { GitOperations } from "./git-operations.js";
 
 /**
  * WaveExecutor — executes waves sequentially, parallel tasks within each wave.
@@ -26,6 +22,7 @@ export class WaveExecutor {
     private adapterRegistry: AdapterRegistry,
     private stateManager: RunStateManager,
     private config: OrchestratorConfig,
+    private gitOps: GitOperations,
   ) {}
 
   async execute(runId: string): Promise<RunState> {
@@ -65,7 +62,10 @@ export class WaveExecutor {
   }
 
   private async runTask(runId: string, task: Task): Promise<void> {
-    const worktreePath = await this.createWorktree(task.id);
+    const branchName = this.branchName(task);
+    const worktreePath = `.orchestrator/worktrees/${task.id}`;
+
+    await this.gitOps.createWorktree(branchName, worktreePath, this.config.baseBranch);
     this.stateManager.updateTask(runId, task.id, {
       worktreePath,
       status: "running",
@@ -85,13 +85,6 @@ export class WaveExecutor {
     }
   }
 
-  private async createWorktree(taskId: string): Promise<string> {
-    const branchName = `orchestrator/${taskId}`;
-    const worktreePath = join(".orchestrator/worktrees", taskId);
-    await exec(`git worktree add -b ${branchName} ${worktreePath} ${this.config.baseBranch}`);
-    return worktreePath;
-  }
-
   private async commitAndCreatePR(
     runId: string,
     task: Task,
@@ -99,22 +92,18 @@ export class WaveExecutor {
     result: AdapterResult,
   ): Promise<void> {
     // Stage all changes and squash into one commit
-    await exec(`git -C ${worktreePath} add -A`);
     const commitMessage = `${task.title}\n\nTask: ${task.id}\nAdapter: ${task.adapter}`;
-    await exec(`git -C ${worktreePath} commit -m "${commitMessage.replace(/"/g, '\\"')}"`);
+    await this.gitOps.commitAll(worktreePath, commitMessage);
 
     // Push the branch
-    const branchName = `orchestrator/${task.id}`;
-    await exec(`git -C ${worktreePath} push -u origin ${branchName}`);
+    const branchName = this.branchName(task);
+    await this.gitOps.push(worktreePath, branchName);
 
     // Create PR via gh CLI
     const prBody = this.buildPRBody(task, result);
-    const { stdout } = await exec(
-      `gh pr create --title "${task.title.replace(/"/g, '\\"')}" --body "${prBody.replace(/"/g, '\\"')}" --base ${this.config.baseBranch} --head ${branchName}`,
-    );
-    const prUrl = stdout.trim();
+    const pr = await this.gitOps.createPR(task.title, prBody, this.config.baseBranch, branchName);
 
-    this.stateManager.updateTask(runId, task.id, { prUrl });
+    this.stateManager.updateTask(runId, task.id, { prUrl: pr.url, prNumber: pr.number });
   }
 
   private buildPRBody(task: Task, result: AdapterResult): string {
@@ -151,7 +140,7 @@ export class WaveExecutor {
       }
 
       try {
-        await exec(`gh pr merge ${task.prUrl} --squash --delete-branch`);
+        await this.gitOps.mergePR(task.prUrl);
       } catch {
         // Merge conflict — flag for user intervention
         this.stateManager.updateTask(runId, task.id, { status: "conflicted" });
@@ -164,11 +153,26 @@ export class WaveExecutor {
     for (const task of tasks) {
       if (task.worktreePath) {
         try {
-          await exec(`git worktree remove --force ${task.worktreePath}`);
+          await this.gitOps.removeWorktree(task.worktreePath);
         } catch {
           // Worktree may already be removed
         }
       }
     }
   }
+
+  /** Branch naming convention: orchestrator/<task-id>-<slug> */
+  private branchName(task: Task): string {
+    const slug = slugify(task.title);
+    return `orchestrator/${task.id}-${slug}`;
+  }
+}
+
+/** Convert a title to a URL-safe slug. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
 }
