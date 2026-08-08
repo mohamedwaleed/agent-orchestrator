@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Orchestrator } from "./orchestrator.js";
 import { RealGitOperations } from "./execution/real-git-operations.js";
+import type { GitOperations } from "./execution/git-operations.js";
 import { LocalTicketSource } from "./ticket-source/local-source.js";
 import { GitHubTicketSource } from "./ticket-source/github-source.js";
 import { StubAdapter } from "./adapter-registry/stub-adapter.js";
@@ -57,7 +58,9 @@ async function runCommand(args: string[]): Promise<void> {
 
   // For the tracer bullet, use the stub adapter
   const adapters = [new StubAdapter()];
-  const gitOps = new RealGitOperations();
+  const gitOps: GitOperations = parsed.noPr
+    ? new NoPrGitOperations(new RealGitOperations())
+    : new RealGitOperations();
 
   const orchestrator = new Orchestrator(
     mergedConfig,
@@ -130,6 +133,7 @@ interface ParsedArgs {
   plannerModel?: string;
   promptTemplatePath?: string;
   ticketSource?: OrchestratorConfig["ticketSource"];
+  noPr?: boolean;
 }
 
 function parseRunArgs(args: string[]): ParsedArgs {
@@ -173,6 +177,8 @@ function parseRunArgs(args: string[]): ParsedArgs {
         parsed.ticketSource.filter = args[i + 1];
       }
       i++;
+    } else if (arg === "--no-pr") {
+      parsed.noPr = true;
     }
   }
 
@@ -203,6 +209,7 @@ Options:
   --planner-model <name>     Planner LLM model (default: from config)
   --prompt-template <path>   Path to prompt template file (default: from config)
   --label <label>            Filter GitHub issues by label
+  --no-pr                    Run execution (worktrees + adapter) but skip commit, push, PR, and merge
 `);
 }
 
@@ -210,3 +217,37 @@ main().catch((err) => {
   console.error("Error:", err.message);
   process.exit(1);
 });
+
+/**
+ * NoPrGitOperations — wraps RealGitOperations but skips commit, push, PR, and merge.
+ * Used with --no-pr to test execution (worktree creation, adapter sessions) without
+ * creating real PRs. Worktree creation and cleanup still run.
+ */
+class NoPrGitOperations implements GitOperations {
+  constructor(private inner: GitOperations) {}
+
+  async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
+    await this.inner.createWorktree(branchName, worktreePath, baseBranch);
+  }
+
+  async commitAll(_worktreePath: string, _message: string): Promise<void> {
+    console.log("  [--no-pr] skipping commit");
+  }
+
+  async push(_worktreePath: string, _branchName: string): Promise<void> {
+    console.log("  [--no-pr] skipping push");
+  }
+
+  async createPR(_title: string, _body: string, _baseBranch: string, _headBranch: string): Promise<{ url: string; number: number }> {
+    console.log("  [--no-pr] skipping PR creation");
+    return { url: "(skipped)", number: 0 };
+  }
+
+  async mergePR(_prUrl: string): Promise<void> {
+    console.log("  [--no-pr] skipping PR merge");
+  }
+
+  async removeWorktree(worktreePath: string): Promise<void> {
+    await this.inner.removeWorktree(worktreePath);
+  }
+}
