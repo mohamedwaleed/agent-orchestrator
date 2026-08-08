@@ -51,26 +51,24 @@ export class WaveExecutor {
     const run = this.stateManager.getRun(runId)!;
     const waveTaskIds = run.plan!.waves[waveNum];
     const tasks = this.stateManager.getTasks(runId).filter((t) => waveTaskIds.includes(t.id));
+    const runnable = tasks.filter((t) => t.status !== "completed" && t.status !== "failed");
 
-    // Create worktrees and start sessions in parallel
-    const sessionPromises: Promise<void>[] = [];
-    for (const task of tasks) {
-      if (task.status === "completed" || task.status === "failed") continue;
-      sessionPromises.push(this.runTask(runId, task));
+    // Create worktrees sequentially — git worktree metadata is not safe under
+    // concurrent `git worktree add` operations against the same repo.
+    const prepared: Array<{ task: Task; worktreePath: string }> = [];
+    for (const task of runnable) {
+      const branchName = this.branchName(task);
+      const worktreePath = `.orchestrator/worktrees/${task.id}`;
+      await this.gitOps.createWorktree(branchName, worktreePath, this.config.baseBranch);
+      this.stateManager.updateTask(runId, task.id, { worktreePath, status: "running" });
+      prepared.push({ task, worktreePath });
     }
-    await Promise.all(sessionPromises);
+
+    // Start sessions in parallel (automatic accept mode) and wait for completion
+    await Promise.all(prepared.map(({ task, worktreePath }) => this.runSession(runId, task, worktreePath)));
   }
 
-  private async runTask(runId: string, task: Task): Promise<void> {
-    const branchName = this.branchName(task);
-    const worktreePath = `.orchestrator/worktrees/${task.id}`;
-
-    await this.gitOps.createWorktree(branchName, worktreePath, this.config.baseBranch);
-    this.stateManager.updateTask(runId, task.id, {
-      worktreePath,
-      status: "running",
-    });
-
+  private async runSession(runId: string, task: Task, worktreePath: string): Promise<void> {
     const adapter = this.adapterRegistry.getAdapter(task.adapter);
     const sessionId = await adapter.startSession(worktreePath, task.prompt);
     this.stateManager.updateTask(runId, task.id, { sessionId });

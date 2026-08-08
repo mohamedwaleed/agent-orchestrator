@@ -239,3 +239,74 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     await expect(orchestrator.plan(tickets)).rejects.toThrow(/Circular dependency/);
   });
 });
+
+describe("Orchestrator — parallel tasks in a single wave", () => {
+  it("creates worktrees sequentially within a wave (git worktree metadata is not concurrency-safe)", async () => {
+    // Three independent tickets → all land in Wave 0
+    const tickets = [
+      makeTicket({ id: "T1", title: "Task one" }),
+      makeTicket({ id: "T2", title: "Task two" }),
+      makeTicket({ id: "T3", title: "Task three" }),
+    ];
+    const ticketSource = new FakeTicketSource(tickets);
+    const adapter = new FakeAdapter();
+
+    // Fake that detects concurrent createWorktree calls
+    const gitOps = new SequentialDetectingGitOperations();
+    const orchestrator = new Orchestrator(makeConfig(), ticketSource, gitOps, [adapter], ":memory:");
+
+    const fetched = await orchestrator.intake();
+    const plan = await orchestrator.plan(fetched);
+    expect(plan.waves[0]).toHaveLength(3); // all in one wave
+
+    const runState = await orchestrator.approve(plan);
+    await orchestrator.execute(runState.id);
+
+    expect(gitOps.concurrentWorktreeError).toBeUndefined();
+  });
+});
+
+/**
+ * FakeGitOperations variant that detects concurrent createWorktree calls.
+ * Git's worktree metadata is not safe under concurrent `git worktree add` —
+ * if two calls overlap, this fake records the error.
+ */
+class SequentialDetectingGitOperations implements GitOperations {
+  calls: RecordedCall[] = [];
+  prUrl = "https://github.com/owner/repo/pull/1";
+  prNumber = 1;
+  concurrentWorktreeError?: string;
+  private worktreeInProgress = false;
+
+  async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
+    this.calls.push({ method: "createWorktree", args: [branchName, worktreePath, baseBranch] });
+    if (this.worktreeInProgress) {
+      this.concurrentWorktreeError = `Concurrent createWorktree detected: ${branchName} started while another was in progress`;
+    }
+    this.worktreeInProgress = true;
+    // Simulate the non-zero time git worktree add takes
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    this.worktreeInProgress = false;
+  }
+
+  async commitAll(worktreePath: string, message: string): Promise<void> {
+    this.calls.push({ method: "commitAll", args: [worktreePath, message] });
+  }
+
+  async push(worktreePath: string, branchName: string): Promise<void> {
+    this.calls.push({ method: "push", args: [worktreePath, branchName] });
+  }
+
+  async createPR(title: string, body: string, baseBranch: string, headBranch: string): Promise<{ url: string; number: number }> {
+    this.calls.push({ method: "createPR", args: [title, body, baseBranch, headBranch] });
+    return { url: this.prUrl, number: this.prNumber };
+  }
+
+  async mergePR(prUrl: string): Promise<void> {
+    this.calls.push({ method: "mergePR", args: [prUrl] });
+  }
+
+  async removeWorktree(worktreePath: string): Promise<void> {
+    this.calls.push({ method: "removeWorktree", args: [worktreePath] });
+  }
+}
