@@ -9,7 +9,18 @@
       "Exec(git remote)",
       "Exec(gh repo)",
       "Exec(git status)",
-      "Exec(git add)"
+      "Exec(git add)",
+      "Exec(git push)",
+      "Exec(gh label)",
+      "Exec(gh issue)",
+      "Exec(cat)",
+      "Exec(wait)",
+      "Exec(python3)",
+      "Exec(node)",
+      "Exec(git log)",
+      "Exec(git checkout)",
+      "Exec(git commit)",
+      "Exec(git diff)"
     ]
   }
 }

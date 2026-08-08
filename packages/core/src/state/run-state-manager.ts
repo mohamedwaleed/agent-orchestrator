@@ -19,18 +19,21 @@ export class RunStateManager {
     const runId = `run-${Date.now()}`;
     const now = new Date().toISOString();
 
+    // Clone tasks so the plan remains immutable — execution mutates run state, not the plan
+    const tasks: Task[] = plan.tasks.map((t) => ({ ...t, attachMessages: [...t.attachMessages] }));
+
     const run: RunState = {
       id: runId,
-      phase: "execution",
+      phase: "approval",
       plan,
       currentWave: 0,
-      tasks: plan.tasks,
+      tasks,
       startedAt: now,
       updatedAt: now,
     };
 
     this.runs.set(runId, run);
-    this.tasks.set(runId, [...plan.tasks]);
+    this.tasks.set(runId, tasks);
     return run;
   }
 
