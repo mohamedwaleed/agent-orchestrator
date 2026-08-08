@@ -10,6 +10,11 @@ const exec = promisify(execChildProcess);
  */
 export class RealGitOperations implements GitOperations {
   async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
+    // Clean up any stale worktree/branch from a previous failed run so re-runs
+    // are idempotent. git worktree metadata is not safe under concurrent adds,
+    // but these cleanups are sequential and best-effort — failures are ignored.
+    await exec(`git worktree remove --force ${worktreePath} 2>/dev/null || true`);
+    await exec(`git branch -D ${branchName} 2>/dev/null || true`);
     await exec(`git worktree add -b ${branchName} ${worktreePath} ${baseBranch}`);
   }
 
