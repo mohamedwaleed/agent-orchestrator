@@ -8,7 +8,9 @@
   "bin": {
     "orchestrator": "dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -17,7 +19,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@orchestrator/types": "workspace:*"
+    "@orchestrator/types": "workspace:*",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

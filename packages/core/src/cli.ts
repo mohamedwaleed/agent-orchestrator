@@ -39,6 +39,10 @@ async function runCommand(args: string[]): Promise<void> {
   if (parsed.adapter) overrides.adapter = parsed.adapter;
   if (parsed.baseBranch) overrides.baseBranch = parsed.baseBranch;
   if (parsed.ticketSource) overrides.ticketSource = parsed.ticketSource;
+  if (parsed.mergeGate !== undefined) overrides.mergeGate = parsed.mergeGate;
+  if (parsed.plannerProvider) overrides.plannerProvider = parsed.plannerProvider;
+  if (parsed.plannerModel) overrides.plannerModel = parsed.plannerModel;
+  if (parsed.promptTemplatePath) overrides.promptTemplatePath = parsed.promptTemplatePath;
 
   const mergedConfig = configLoader.load(overrides);
 
@@ -121,6 +125,10 @@ async function runCommand(args: string[]): Promise<void> {
 interface ParsedArgs {
   adapter?: string;
   baseBranch?: string;
+  mergeGate?: boolean;
+  plannerProvider?: string;
+  plannerModel?: string;
+  promptTemplatePath?: string;
   ticketSource?: OrchestratorConfig["ticketSource"];
 }
 
@@ -146,6 +154,19 @@ function parseRunArgs(args: string[]): ParsedArgs {
       i++;
     } else if (arg === "--base-branch" && i + 1 < args.length) {
       parsed.baseBranch = args[i + 1];
+      i++;
+    } else if (arg === "--merge-gate") {
+      parsed.mergeGate = true;
+    } else if (arg === "--no-merge-gate") {
+      parsed.mergeGate = false;
+    } else if (arg === "--planner-provider" && i + 1 < args.length) {
+      parsed.plannerProvider = args[i + 1];
+      i++;
+    } else if (arg === "--planner-model" && i + 1 < args.length) {
+      parsed.plannerModel = args[i + 1];
+      i++;
+    } else if (arg === "--prompt-template" && i + 1 < args.length) {
+      parsed.promptTemplatePath = args[i + 1];
       i++;
     } else if (arg === "--label" && i + 1 < args.length) {
       if (parsed.ticketSource) {
@@ -174,9 +195,14 @@ Usage:
   orchestrator resume --last
 
 Options:
-  --adapter <name>       Adapter to use (default: from config)
-  --base-branch <name>   Base branch for worktrees and PRs (default: main)
-  --label <label>        Filter GitHub issues by label
+  --adapter <name>           Adapter to use (default: from config)
+  --base-branch <name>       Base branch for worktrees and PRs (default: main)
+  --merge-gate               Enable the merge gate between waves (default: false)
+  --no-merge-gate            Disable the merge gate (overrides config)
+  --planner-provider <name>  Planner LLM provider (default: from config)
+  --planner-model <name>     Planner LLM model (default: from config)
+  --prompt-template <path>   Path to prompt template file (default: from config)
+  --label <label>            Filter GitHub issues by label
 `);
 }
 
