@@ -2,6 +2,7 @@
 import { Orchestrator } from "./orchestrator.js";
 import { RealGitOperations } from "./execution/real-git-operations.js";
 import { LocalTicketSource } from "./ticket-source/local-source.js";
+import { GitHubTicketSource } from "./ticket-source/github-source.js";
 import { StubAdapter } from "./adapter-registry/stub-adapter.js";
 import { ConfigLoader } from "./config/config-loader.js";
 import type { OrchestratorConfig } from "@orchestrator/types";
@@ -51,8 +52,7 @@ async function runCommand(args: string[]): Promise<void> {
   if (mergedConfig.ticketSource.kind === "local") {
     ticketSource = new LocalTicketSource(mergedConfig.ticketSource.ref);
   } else {
-    console.error("GitHub ticket source is not yet implemented in the CLI");
-    process.exit(1);
+    ticketSource = new GitHubTicketSource(mergedConfig.ticketSource.ref, mergedConfig.ticketSource.filter);
   }
 
   // For the tracer bullet, use the stub adapter
