@@ -10,3 +10,4 @@ export { StubAdapter } from "./adapter-registry/stub-adapter.js";
 export { RunStateManager } from "./state/run-state-manager.js";
 export { ConfigLoader } from "./config/config-loader.js";
 export type { OrchestratorConfig, TicketSourceConfig } from "./config/config-loader.js";
+export { createHttpServer } from "./server.js";
