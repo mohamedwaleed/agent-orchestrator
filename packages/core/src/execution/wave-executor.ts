@@ -6,15 +6,24 @@ import type { GitOperations } from "./git-operations.js";
 import type { OrchestratorOptions } from "../orchestrator.js";
 
 /**
- * WaveExecutor — executes waves sequentially, parallel tasks within each wave.
+ * Options for executing a single wave.
+ */
+export interface ExecuteWaveOptions {
+  /** Maximum number of tasks to run concurrently within the wave. Default: unlimited. */
+  maxParallelism?: number;
+  /** Specific task IDs to run. If omitted, all runnable tasks in the wave are executed. */
+  taskIds?: string[];
+}
+
+/**
+ * WaveExecutor — executes waves and merges their results.
  *
- * Per wave:
- * 1. Create worktrees from Base Branch
- * 2. Start sessions in parallel (automatic accept mode)
- * 3. Wait for completion
- * 4. Commit + create PR per task
- * 5. Merge PRs into Base Branch (auto-merge or Merge Gate)
- * 6. Flag merge conflicts
+ * The user-driven execution model (ADR-0008) splits execution into separate
+ * steps the user controls:
+ *   1. executeWave(runId, waveNum, options) — run tasks in a wave (with optional
+ *      parallelism limit and task selection). Does NOT auto-advance or merge.
+ *   2. mergeWave(runId, waveNum) — merge completed PRs from a wave.
+ *   3. execute(runId) — convenience: run all remaining waves + merges (for `run` command).
  *
  * Worktrees persist through the entire Run — cleaned up only after completion.
  */
@@ -33,13 +42,17 @@ export class WaveExecutor {
     this.onProgress = options.onProgress ?? ((msg: string) => console.log(msg));
   }
 
+  /**
+   * Convenience: execute all remaining waves + merges sequentially.
+   * Used by the `run` command. For user-driven execution, use executeWave + mergeWave.
+   */
   async execute(runId: string): Promise<RunState> {
     const run = this.stateManager.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
 
     for (let wave = run.currentWave; wave < run.plan!.waves.length; wave++) {
       await this.executeWave(runId, wave);
-      await this.mergeWaveResults(runId, wave);
+      await this.mergeWave(runId, wave);
       this.stateManager.updateRun(runId, { currentWave: wave + 1 });
     }
 
@@ -51,15 +64,35 @@ export class WaveExecutor {
   async resume(runId: string): Promise<RunState> {
     const run = this.stateManager.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
-    // Reconnect to running sessions and continue from current wave
     return this.execute(runId);
   }
 
-  private async executeWave(runId: string, waveNum: number): Promise<void> {
-    const run = this.stateManager.getRun(runId)!;
+  /**
+   * Execute tasks in a specific wave. Does NOT merge or advance to the next wave.
+   * The user calls mergeWave separately when they're ready.
+   */
+  async executeWave(runId: string, waveNum: number, options: ExecuteWaveOptions = {}): Promise<RunState> {
+    const run = this.stateManager.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (waveNum < 0 || waveNum >= run.plan!.waves.length) {
+      throw new Error(`Wave ${waveNum} does not exist (plan has ${run.plan!.waves.length} waves)`);
+    }
+
     const waveTaskIds = run.plan!.waves[waveNum];
-    const tasks = this.stateManager.getTasks(runId).filter((t) => waveTaskIds.includes(t.id));
-    const runnable = tasks.filter((t) => t.status !== "completed" && t.status !== "failed");
+    let tasks = this.stateManager.getTasks(runId).filter((t) => waveTaskIds.includes(t.id));
+
+    // Filter to selected task IDs if specified
+    if (options.taskIds) {
+      tasks = tasks.filter((t) => options.taskIds!.includes(t.id));
+    }
+
+    // Skip tasks that are already completed, failed, or conflicted
+    const runnable = tasks.filter((t) => t.status !== "completed" && t.status !== "failed" && t.status !== "conflicted");
+
+    if (runnable.length === 0) {
+      this.onProgress(`Wave ${waveNum}: no tasks to run (all completed/failed).`);
+      return this.stateManager.getRun(runId)!;
+    }
 
     this.onProgress(`--- Wave ${waveNum}: ${runnable.map((t) => t.id).join(", ")} ---`);
 
@@ -75,9 +108,74 @@ export class WaveExecutor {
       prepared.push({ task, worktreePath });
     }
 
-    // Start sessions in parallel (automatic accept mode) and wait for completion
-    await Promise.all(prepared.map(({ task, worktreePath }) => this.runSession(runId, task, worktreePath)));
+    // Run sessions with optional parallelism limit
+    const maxParallelism = options.maxParallelism ?? prepared.length;
+    await this.runWithConcurrency(prepared, maxParallelism, ({ task, worktreePath }) =>
+      this.runSession(runId, task, worktreePath),
+    );
+
+    return this.stateManager.getRun(runId)!;
   }
+
+  /**
+   * Merge completed PRs from a specific wave. The user calls this after
+   * reviewing PRs on GitHub and deciding to merge.
+   */
+  async mergeWave(runId: string, waveNum: number): Promise<RunState> {
+    const run = this.stateManager.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+
+    const waveTaskIds = run.plan!.waves[waveNum];
+    const tasks = this.stateManager.getTasks(runId).filter((t) => waveTaskIds.includes(t.id));
+    const completedWithPR = tasks.filter((t) => t.status === "completed" && t.prUrl);
+
+    if (completedWithPR.length === 0) {
+      this.onProgress(`Wave ${waveNum}: no completed PRs to merge.`);
+      return this.stateManager.getRun(runId)!;
+    }
+
+    // Merge gate: ask the user whether to merge the PRs from this wave.
+    if (this.config.mergeGate) {
+      const summaries = completedWithPR.map((t) => `  ${t.id}: ${t.title} — ${t.prUrl}`);
+      this.onProgress(`\n=== Merge Gate (Wave ${waveNum}) ===`);
+      this.onProgress(`The following PRs are ready to merge:\n${summaries.join("\n")}`);
+      this.onProgress(`Review them on GitHub before approving.`);
+
+      const approved = await this.mergeGatePrompt(waveNum, summaries);
+      if (!approved) {
+        this.onProgress(`Merge gate declined — PRs left open for manual review.`);
+        return this.stateManager.getRun(runId)!;
+      }
+      this.onProgress(`Merge gate approved — merging PRs...`);
+    } else {
+      // mergeGate disabled: leave PRs open, don't auto-merge
+      this.onProgress(`\nPRs created (auto-merge disabled):`);
+      for (const task of completedWithPR) {
+        this.onProgress(`  ${task.id}: ${task.prUrl}`);
+      }
+      this.onProgress(`Review and merge manually on GitHub.\n`);
+      return this.stateManager.getRun(runId)!;
+    }
+
+    for (const task of completedWithPR) {
+      try {
+        await this.gitOps.mergePR(task.prUrl!);
+        this.onProgress(`  [${task.id}] merged: ${task.prUrl}`);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.stateManager.updateTask(runId, task.id, { status: "conflicted", conflictReason: reason });
+        this.onProgress(`  [${task.id}] CONFLICTED — merge failed: ${reason}`);
+        this.onProgress(`    PR: ${task.prUrl}`);
+        this.onProgress(`    Resolve the conflict on GitHub, then merge manually.`);
+      }
+    }
+
+    return this.stateManager.getRun(runId)!;
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal helpers
+  // -------------------------------------------------------------------------
 
   private async runSession(runId: string, task: Task, worktreePath: string): Promise<void> {
     const adapter = this.adapterRegistry.getAdapter(task.adapter);
@@ -103,21 +201,45 @@ export class WaveExecutor {
     }
   }
 
+  /**
+   * Run async tasks with a concurrency limit. At most `limit` tasks run at once;
+   * as each completes, the next queued task starts.
+   */
+  private async runWithConcurrency<T>(
+    items: T[],
+    limit: number,
+    fn: (item: T) => Promise<void>,
+  ): Promise<void> {
+    let index = 0;
+    const workers: Promise<void>[] = [];
+    const workerCount = Math.min(limit, items.length);
+
+    for (let w = 0; w < workerCount; w++) {
+      workers.push(
+        (async () => {
+          while (index < items.length) {
+            const currentIndex = index++;
+            await fn(items[currentIndex]);
+          }
+        })(),
+      );
+    }
+
+    await Promise.all(workers);
+  }
+
   private async commitAndCreatePR(
     runId: string,
     task: Task,
     worktreePath: string,
     result: AdapterResult,
   ): Promise<void> {
-    // Stage all changes and squash into one commit
     const commitMessage = `${task.title}\n\nTask: ${task.id}\nAdapter: ${task.adapter}`;
     await this.gitOps.commitAll(worktreePath, commitMessage);
 
-    // Push the branch
     const branchName = this.branchName(task);
     await this.gitOps.push(worktreePath, branchName);
 
-    // Create PR via gh CLI
     const prBody = this.buildPRBody(task, result);
     const pr = await this.gitOps.createPR(task.title, prBody, this.config.baseBranch, branchName);
 
@@ -143,52 +265,6 @@ export class WaveExecutor {
 
     parts.push("", `---`, `Generated by Agent Orchestrator`);
     return parts.join("\n");
-  }
-
-  private async mergeWaveResults(runId: string, waveNum: number): Promise<void> {
-    const run = this.stateManager.getRun(runId)!;
-    const waveTaskIds = run.plan!.waves[waveNum];
-    const tasks = this.stateManager.getTasks(runId).filter((t) => waveTaskIds.includes(t.id));
-    const completedWithPR = tasks.filter((t) => t.status === "completed" && t.prUrl);
-
-    if (completedWithPR.length === 0) return;
-
-    // Merge gate: ask the user whether to merge the PRs from this wave.
-    // In tracer-bullet mode (mergeGate disabled), PRs are left open for human review.
-    if (this.config.mergeGate) {
-      const summaries = completedWithPR.map((t) => `  ${t.id}: ${t.title} — ${t.prUrl}`);
-      this.onProgress(`\n=== Merge Gate (Wave ${waveNum}) ===`);
-      this.onProgress(`The following PRs are ready to merge:\n${summaries.join("\n")}`);
-      this.onProgress(`Review them on GitHub before approving.`);
-
-      const approved = await this.mergeGatePrompt(waveNum, summaries);
-      if (!approved) {
-        this.onProgress(`Merge gate declined — PRs left open for manual review.`);
-        return;
-      }
-      this.onProgress(`Merge gate approved — merging PRs...`);
-    } else {
-      // mergeGate disabled: leave PRs open, don't auto-merge
-      this.onProgress(`\nPRs created (auto-merge disabled):`);
-      for (const task of completedWithPR) {
-        this.onProgress(`  ${task.id}: ${task.prUrl}`);
-      }
-      this.onProgress(`Review and merge manually on GitHub.\n`);
-      return;
-    }
-
-    for (const task of completedWithPR) {
-      try {
-        await this.gitOps.mergePR(task.prUrl!);
-        this.onProgress(`  [${task.id}] merged: ${task.prUrl}`);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        this.stateManager.updateTask(runId, task.id, { status: "conflicted", conflictReason: reason });
-        this.onProgress(`  [${task.id}] CONFLICTED — merge failed: ${reason}`);
-        this.onProgress(`    PR: ${task.prUrl}`);
-        this.onProgress(`    Resolve the conflict on GitHub, then merge manually.`);
-      }
-    }
   }
 
   private async cleanupWorktrees(runId: string): Promise<void> {
