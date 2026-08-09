@@ -53,6 +53,7 @@ class FakeGitOperations implements GitOperations {
   prUrl = "https://github.com/owner/repo/pull/1";
   prNumber = 1;
   mergeShouldFail = false;
+  mergeErrorMessage = "Merge conflict";
 
   async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
     this.calls.push({ method: "createWorktree", args: [branchName, worktreePath, baseBranch] });
@@ -73,7 +74,7 @@ class FakeGitOperations implements GitOperations {
 
   async mergePR(prUrl: string): Promise<void> {
     this.calls.push({ method: "mergePR", args: [prUrl] });
-    if (this.mergeShouldFail) throw new Error("Merge conflict");
+    if (this.mergeShouldFail) throw new Error(this.mergeErrorMessage);
   }
 
   async removeWorktree(worktreePath: string): Promise<void> {
@@ -121,7 +122,8 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     const ticketSource = new FakeTicketSource([ticket]);
     const adapter = new FakeAdapter();
     const gitOps = new FakeGitOperations();
-    const config = makeConfig();
+    // Explicitly disable merge gate for this tracer bullet test
+    const config = makeConfig({ mergeGate: false });
     const orchestrator = new Orchestrator(config, ticketSource, gitOps, [adapter], ":memory:");
 
     // Act — run the full lifecycle
@@ -174,9 +176,10 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     expect(pushCall!.args[1]).toBe("orchestrator/TICKET-001-add-hello-world-endpoint");
     expect(prCall!.args[3]).toBe("orchestrator/TICKET-001-add-hello-world-endpoint");
 
-    // Assert — the PR was merged (auto-merge, no merge gate)
+    // Assert — with mergeGate disabled, PR is created but NOT auto-merged
+    // (left open for human review)
     const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
-    expect(mergeCall).toBeDefined();
+    expect(mergeCall).toBeUndefined();
 
     // Assert — worktree was cleaned up
     const removeCall = gitOps.calls.find((c) => c.method === "removeWorktree");
@@ -208,7 +211,7 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     };
 
     const gitOps = new FakeGitOperations();
-    const orchestrator = new Orchestrator(makeConfig(), ticketSource, gitOps, [failingAdapter], ":memory:");
+    const orchestrator = new Orchestrator(makeConfig({ mergeGate: false }), ticketSource, gitOps, [failingAdapter], ":memory:");
 
     const tickets = await orchestrator.intake();
     const plan = await orchestrator.plan(tickets);
@@ -253,7 +256,7 @@ describe("Orchestrator — parallel tasks in a single wave", () => {
 
     // Fake that detects concurrent createWorktree calls
     const gitOps = new SequentialDetectingGitOperations();
-    const orchestrator = new Orchestrator(makeConfig(), ticketSource, gitOps, [adapter], ":memory:");
+    const orchestrator = new Orchestrator(makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], ":memory:");
 
     const fetched = await orchestrator.intake();
     const plan = await orchestrator.plan(fetched);
@@ -263,6 +266,111 @@ describe("Orchestrator — parallel tasks in a single wave", () => {
     await orchestrator.execute(runState.id);
 
     expect(gitOps.concurrentWorktreeError).toBeUndefined();
+  });
+});
+
+describe("Orchestrator — merge gate", () => {
+  it("does not merge PRs when mergeGate is enabled and the user declines", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const config = makeConfig({ mergeGate: true });
+
+    // User declines the merge gate — PRs should stay open, not be merged
+    const orchestrator = new Orchestrator(
+      config, ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => false },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    const finalState = await orchestrator.execute(runState.id);
+
+    // PR was created but NOT merged
+    const prCall = gitOps.calls.find((c) => c.method === "createPR");
+    expect(prCall).toBeDefined();
+    const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
+    expect(mergeCall).toBeUndefined();
+
+    // Task is still completed (PR exists), just not merged
+    const task = finalState.tasks.find((t) => t.id === "TICKET-001");
+    expect(task!.status).toBe("completed");
+  });
+
+  it("merges PRs when mergeGate is enabled and the user approves", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const config = makeConfig({ mergeGate: true });
+
+    const orchestrator = new Orchestrator(
+      config, ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => true },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    await orchestrator.execute(runState.id);
+
+    const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
+    expect(mergeCall).toBeDefined();
+  });
+});
+
+describe("Orchestrator — conflict reporting", () => {
+  it("captures the merge error message and shows the PR URL for conflicted tasks", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    gitOps.mergeShouldFail = true;
+    gitOps.mergeErrorMessage = "Pull Request has merge conflicts (mergePullRequest)";
+
+    // mergeGate enabled + user approves → merge fails → conflicted
+    const orchestrator = new Orchestrator(
+      makeConfig({ mergeGate: true }), ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => true },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    const finalState = await orchestrator.execute(runState.id);
+
+    const task = finalState.tasks.find((t) => t.id === "TICKET-001");
+    expect(task!.status).toBe("conflicted");
+    expect(task!.conflictReason).toBe("Pull Request has merge conflicts (mergePullRequest)");
+    expect(task!.prUrl).toBe("https://github.com/owner/repo/pull/1");
+  });
+});
+
+describe("Orchestrator — execution progress logging", () => {
+  it("emits progress events for wave start, task start, task completion, and wave end", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+
+    const events: string[] = [];
+    const orchestrator = new Orchestrator(
+      makeConfig(), ticketSource, gitOps, [adapter], ":memory:",
+      { onProgress: (msg) => events.push(msg) },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    await orchestrator.execute(runState.id);
+
+    // Should have events for wave start, task start, task completion, PR creation
+    expect(events.some((e) => e.includes("Wave 0"))).toBe(true);
+    expect(events.some((e) => e.includes("TICKET-001") && e.includes("starting"))).toBe(true);
+    expect(events.some((e) => e.includes("TICKET-001") && e.includes("completed"))).toBe(true);
+    expect(events.some((e) => e.includes("PR"))).toBe(true);
   });
 });
 

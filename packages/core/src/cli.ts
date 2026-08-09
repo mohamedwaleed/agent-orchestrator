@@ -105,6 +105,11 @@ async function runCommand(args: string[]): Promise<void> {
     gitOps,
     adapters,
     ".orchestrator/state.db",
+    // Production options: use the default stdin-based merge gate prompt and
+    // console.log for progress events. Tests inject fakes instead.
+    {
+      onProgress: (msg) => console.log(msg),
+    },
   );
 
   // Phase 1: Intake
@@ -158,6 +163,9 @@ async function runCommand(args: string[]): Promise<void> {
     console.log(`\nConflicted (${conflicted.length}):`);
     for (const task of conflicted) {
       console.log(`  - [${task.id}] ${task.title}`);
+      if (task.prUrl) console.log(`    PR: ${task.prUrl}`);
+      if (task.conflictReason) console.log(`    Reason: ${task.conflictReason}`);
+      console.log(`    Action: Resolve the conflict on GitHub, then merge manually.`);
     }
   }
 }
@@ -240,8 +248,8 @@ Usage:
 Options:
   --adapter <name>           Adapter to use (default: from config)
   --base-branch <name>       Base branch for worktrees and PRs (default: main)
-  --merge-gate               Enable the merge gate between waves (default: false)
-  --no-merge-gate            Disable the merge gate (overrides config)
+  --merge-gate               Enable the merge gate between waves (default: true)
+  --no-merge-gate            Disable the merge gate — PRs are left open for manual review
   --planner-provider <name>  Planner LLM provider (default: from config)
   --planner-model <name>     Planner LLM model (default: from config)
   --prompt-template <path>   Path to prompt template file (default: from config)

@@ -8,6 +8,18 @@ import type { TicketSource } from "./ticket-source/ticket-source.js";
 import type { GitOperations } from "./execution/git-operations.js";
 
 /**
+ * Optional hooks for controlling the orchestrator's interactive behavior.
+ * In production these default to real stdin/console prompts. In tests they
+ * are injected with fakes.
+ */
+export interface OrchestratorOptions {
+  /** Called at the merge gate between waves. Returns true to merge, false to leave PRs open. */
+  mergeGatePrompt?: (wave: number, taskSummaries: string[]) => Promise<boolean>;
+  /** Called for each progress event during execution (wave start, task start, etc.). */
+  onProgress?: (message: string) => void;
+}
+
+/**
  * The Orchestrator — coordinates the full Run lifecycle:
  * Intake → Planning → Approval Gate → Execution → Completion → Intervention
  *
@@ -28,6 +40,7 @@ export class Orchestrator {
     gitOps: GitOperations,
     adapters: Adapter[],
     stateDbPath: string,
+    options: OrchestratorOptions = {},
   ) {
     this.stateManager = new RunStateManager(stateDbPath);
     this.planner = new Planner(config);
@@ -35,7 +48,9 @@ export class Orchestrator {
     for (const adapter of adapters) {
       this.adapterRegistry.register(adapter);
     }
-    this.waveExecutor = new WaveExecutor(this.adapterRegistry, this.stateManager, config, gitOps);
+    this.waveExecutor = new WaveExecutor(
+      this.adapterRegistry, this.stateManager, config, gitOps, options,
+    );
   }
 
   /**
