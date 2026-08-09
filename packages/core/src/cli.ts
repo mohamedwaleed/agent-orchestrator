@@ -6,6 +6,7 @@ import { LocalTicketSource } from "./ticket-source/local-source.js";
 import { GitHubTicketSource } from "./ticket-source/github-source.js";
 import { StubAdapter } from "./adapter-registry/stub-adapter.js";
 import { CodexAdapter } from "@orchestrator/adapter-codex";
+import { DevinAdapter } from "@orchestrator/adapter-devin";
 import { ConfigLoader } from "./config/config-loader.js";
 import type { OrchestratorConfig } from "@orchestrator/types";
 
@@ -94,7 +95,7 @@ function createOrchestrator(config: OrchestratorConfig, noPr: boolean): Orchestr
     ticketSource = new GitHubTicketSource(config.ticketSource.ref, config.ticketSource.filter);
   }
 
-  const adapters = [new StubAdapter(), new CodexAdapter()];
+  const adapters = [new StubAdapter(), new CodexAdapter(), new DevinAdapter()];
   const gitOps: GitOperations = noPr
     ? new NoPrGitOperations(new RealGitOperations())
     : new RealGitOperations();
