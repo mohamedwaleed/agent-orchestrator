@@ -15,6 +15,12 @@ export function createHttpServer(): Server {
       return;
     }
 
+    if (request.method === "GET" && request.url === "/ping") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ message: "pong" }));
+      return;
+    }
+
     response.writeHead(404);
     response.end();
   });

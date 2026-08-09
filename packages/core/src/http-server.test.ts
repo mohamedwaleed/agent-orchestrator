@@ -37,4 +37,16 @@ describe("HTTP server", () => {
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.json()).toEqual({ message: "goodbye world" });
   });
+
+  it("returns pong from GET /ping", async () => {
+    server = createHttpServer();
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    const response = await fetch(`http://127.0.0.1:${port}/ping`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.json()).toEqual({ message: "pong" });
+  });
 });
