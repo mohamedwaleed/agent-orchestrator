@@ -1,7 +1,7 @@
 import type { Adapter, AdapterResult, InteractiveSession } from "@orchestrator/types";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 /**
@@ -52,6 +52,10 @@ export class CodexAdapter implements Adapter {
   async startSession(worktreePath: string, prompt: string): Promise<string> {
     const sessionId = `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Resolve to an absolute path so codex's -C flag isn't misinterpreted
+    // relative to its own cwd (which is also set to the worktree).
+    const absWorktree = resolve(worktreePath);
+
     // Create a temp file for the last message output
     const tempDir = await mkdtemp(join(tmpdir(), "orchestrator-codex-"));
     const lastMessageFile = join(tempDir, "last-message.txt");
@@ -61,13 +65,13 @@ export class CodexAdapter implements Adapter {
       [
         "exec",
         prompt,
-        "-C", worktreePath,
+        "-C", absWorktree,
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
         "-o", lastMessageFile,
       ],
       {
-        cwd: worktreePath,
+        cwd: absWorktree,
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
@@ -89,6 +93,11 @@ export class CodexAdapter implements Adapter {
     child.stderr?.on("data", (chunk: Buffer) => {
       session.output += chunk.toString();
     });
+
+    // Close stdin so Codex doesn't block waiting for stdin input. The prompt is
+    // passed as a positional argument; Codex only reads stdin when it's an open
+    // pipe, and an open pipe makes it hang on "Reading additional input from stdin...".
+    child.stdin?.end();
 
     return sessionId;
   }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, readFile, chmod } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { CodexAdapter } from "./index.js";
 
@@ -53,6 +53,20 @@ describe("CodexAdapter", () => {
     // -o points at a last-message file path
     expect(typeof args[args.indexOf("-o") + 1]).toBe("string");
     expect(args[args.indexOf("-o") + 1].length).toBeGreaterThan(0);
+  });
+
+  it("passes an absolute worktree path to -C even when given a relative path", async () => {
+    // The wave executor uses relative worktree paths (e.g. .orchestrator/worktrees/TASK-1).
+    // Codex resolves -C relative to its own cwd, so a relative -C would point to a
+    // nonexistent nested path. The adapter must resolve to absolute.
+    const adapter = new CodexAdapter({ binary: fakeCli });
+    const sessionId = await adapter.startSession(worktree, "do work");
+    await adapter.waitForCompletion(sessionId);
+
+    const args = JSON.parse(await readFile(argvFile, "utf-8")) as string[];
+    const cPath = args[args.indexOf("-C") + 1];
+    expect(isAbsolute(cPath)).toBe(true);
+    expect(cPath).toBe(resolve(worktree));
   });
 
   it("reports success when the process exits with code 0", async () => {
@@ -219,7 +233,12 @@ if (args[0] === "exec" && args[1] === "resume") {
     writeFileSync(lastMessageFile, process.env.FAKE_CODEX_LAST_MESSAGE ?? "done");
   }
 
-  process.exit(Number(process.env.FAKE_CODEX_EXIT ?? "0"));
+  // Mimic real Codex: when stdin is a pipe, wait for EOF before exiting.
+  // This catches adapters that leave stdin open (which blocks the real CLI).
+  process.stdin.resume();
+  process.stdin.on("end", () => {
+    process.exit(Number(process.env.FAKE_CODEX_EXIT ?? "0"));
+  });
 }
 `;
   await writeFile(path, script, "utf-8");
