@@ -13,6 +13,11 @@ export interface CodexAdapterOptions {
    * Tests inject a fake CLI path here so no real Codex CLI is spawned.
    */
   binary?: string;
+  /**
+   * AI model for the Codex session (passed as `-m <model>`).
+   * When omitted, Codex uses its default model.
+   */
+  model?: string;
 }
 
 interface SessionState {
@@ -40,6 +45,7 @@ export class CodexAdapter implements Adapter {
   readonly name = "codex";
 
   private readonly binary: string;
+  private readonly model?: string;
   private sessions = new Map<string, SessionState>();
   /** Maps orchestrator session IDs to Codex native session IDs. Persists across
    * waitForCompletion so attach can resume after a session completes. */
@@ -47,6 +53,7 @@ export class CodexAdapter implements Adapter {
 
   constructor(options: CodexAdapterOptions = {}) {
     this.binary = options.binary ?? "codex";
+    this.model = options.model;
   }
 
   async startSession(worktreePath: string, prompt: string): Promise<string> {
@@ -69,6 +76,7 @@ export class CodexAdapter implements Adapter {
         "--json",
         "--dangerously-bypass-approvals-and-sandbox",
         "-o", lastMessageFile,
+        ...(this.model ? ["-m", this.model] : []),
       ],
       {
         cwd: absWorktree,

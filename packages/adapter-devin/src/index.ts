@@ -13,6 +13,11 @@ export interface DevinAdapterOptions {
    * Tests inject a fake CLI path here so no real Devin CLI is spawned.
    */
   binary?: string;
+  /**
+   * AI model for the Devin session (passed as `--model <model>`).
+   * When omitted, Devin uses its default model.
+   */
+  model?: string;
 }
 
 interface SessionState {
@@ -54,6 +59,7 @@ export class DevinAdapter implements Adapter {
   readonly name = "devin";
 
   private readonly binary: string;
+  private readonly model?: string;
   private sessions = new Map<string, SessionState>();
   /** Maps orchestrator session IDs to Devin native session IDs. Persists across
    * waitForCompletion so attach can resume after a session completes. */
@@ -61,6 +67,7 @@ export class DevinAdapter implements Adapter {
 
   constructor(options: DevinAdapterOptions = {}) {
     this.binary = options.binary ?? "devin";
+    this.model = options.model;
   }
 
   async startSession(worktreePath: string, prompt: string): Promise<string> {
@@ -81,6 +88,7 @@ export class DevinAdapter implements Adapter {
         "--prompt-file", promptFile,
         "--permission-mode", "bypass",
         "--respect-workspace-trust", "false",
+        ...(this.model ? ["--model", this.model] : []),
       ],
       {
         cwd: absWorktree,

@@ -60,6 +60,25 @@ describe("DevinAdapter", () => {
     expect(args).not.toContain("--cd");
   });
 
+  it("passes --model <model> when a model is configured", async () => {
+    const adapter = new DevinAdapter({ binary: fakeCli, model: "opus" });
+    const sessionId = await adapter.startSession(worktree, "do work");
+    await adapter.waitForCompletion(sessionId);
+
+    const args = JSON.parse(await readFile(argvPrint, "utf-8")) as string[];
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("opus");
+  });
+
+  it("omits --model when no model is configured", async () => {
+    const adapter = new DevinAdapter({ binary: fakeCli });
+    const sessionId = await adapter.startSession(worktree, "do work");
+    await adapter.waitForCompletion(sessionId);
+
+    const args = JSON.parse(await readFile(argvPrint, "utf-8")) as string[];
+    expect(args).not.toContain("--model");
+  });
+
   it("writes the prompt to the --prompt-file temp file", async () => {
     const adapter = new DevinAdapter({ binary: fakeCli });
     const sessionId = await adapter.startSession(worktree, "Implement the devin adapter");

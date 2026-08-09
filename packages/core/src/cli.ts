@@ -87,7 +87,7 @@ async function main(): Promise<void> {
 // Shared helpers
 // -------------------------------------------------------------------------
 
-function createOrchestrator(config: OrchestratorConfig, noPr: boolean): Orchestrator {
+function createOrchestrator(config: OrchestratorConfig, noPr: boolean, agentModel?: string): Orchestrator {
   let ticketSource;
   if (config.ticketSource.kind === "local") {
     ticketSource = new LocalTicketSource(config.ticketSource.ref);
@@ -95,7 +95,11 @@ function createOrchestrator(config: OrchestratorConfig, noPr: boolean): Orchestr
     ticketSource = new GitHubTicketSource(config.ticketSource.ref, config.ticketSource.filter);
   }
 
-  const adapters = [new StubAdapter(), new CodexAdapter(), new DevinAdapter()];
+  const adapters = [
+    new StubAdapter(),
+    new CodexAdapter(agentModel ? { model: agentModel } : {}),
+    new DevinAdapter(agentModel ? { model: agentModel } : {}),
+  ];
   const gitOps: GitOperations = noPr
     ? new NoPrGitOperations(new RealGitOperations())
     : new RealGitOperations();
@@ -152,7 +156,7 @@ function resolveRunId(parsed: ParsedArgs): string {
 async function runCommand(args: string[]): Promise<void> {
   const parsed = parseRunArgs(args);
   const config = loadConfig(parsed);
-  const orchestrator = createOrchestrator(config, parsed.noPr ?? false);
+  const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
   // Phase 1: Intake
   console.log("Fetching tickets...");
@@ -190,7 +194,7 @@ async function runCommand(args: string[]): Promise<void> {
 async function planCommand(args: string[]): Promise<void> {
   const parsed = parseRunArgs(args);
   const config = loadConfig(parsed);
-  const orchestrator = createOrchestrator(config, parsed.noPr ?? false);
+  const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
   console.log("Fetching tickets...");
   const tickets = await orchestrator.intake();
@@ -269,7 +273,7 @@ async function executeWaveCommand(args: string[]): Promise<void> {
   const runId = resolveRunId(parsed);
   const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
-  const orchestrator = createOrchestrator(config, parsed.noPr ?? false);
+  const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
   const waveNum = parsed.wave;
   if (waveNum === undefined) {
@@ -292,7 +296,7 @@ async function mergeWaveCommand(args: string[]): Promise<void> {
   const runId = resolveRunId(parsed);
   const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
-  const orchestrator = createOrchestrator(config, false);
+  const orchestrator = createOrchestrator(config, false, parsed.agentModel);
 
   const waveNum = parsed.wave;
   if (waveNum === undefined) {
@@ -311,7 +315,7 @@ async function continueCommand(args: string[]): Promise<void> {
   const runId = resolveRunId(parsed);
   const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
-  const orchestrator = createOrchestrator(config, parsed.noPr ?? false);
+  const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
   // Find the next wave that has pending tasks
   const run = orchestrator.getRunState(runId);
@@ -426,6 +430,7 @@ function printCompletionSummary(finalState: { phase: string; tasks: Array<{ stat
 
 interface ParsedArgs {
   adapter?: string;
+  agentModel?: string;
   baseBranch?: string;
   mergeGate?: boolean;
   plannerProvider?: string;
@@ -486,6 +491,9 @@ function parseWaveArgs(args: string[]): ParsedArgs {
     } else if (arg === "--adapter" && i + 1 < args.length) {
       parsed.adapter = args[i + 1];
       i++;
+    } else if (arg === "--agent-model" && i + 1 < args.length) {
+      parsed.agentModel = args[i + 1];
+      i++;
     } else if (arg === "--base-branch" && i + 1 < args.length) {
       parsed.baseBranch = args[i + 1];
       i++;
@@ -516,6 +524,9 @@ function parseContinueArgs(args: string[]): ParsedArgs {
       parsed.noPr = true;
     } else if (arg === "--adapter" && i + 1 < args.length) {
       parsed.adapter = args[i + 1];
+      i++;
+    } else if (arg === "--agent-model" && i + 1 < args.length) {
+      parsed.agentModel = args[i + 1];
       i++;
     } else if (arg === "--base-branch" && i + 1 < args.length) {
       parsed.baseBranch = args[i + 1];
@@ -560,6 +571,9 @@ function parseCommonArgs(args: string[], parsed: ParsedArgs): void {
     } else if (arg === "--planner-model" && i + 1 < args.length) {
       parsed.plannerModel = args[i + 1];
       i++;
+    } else if (arg === "--agent-model" && i + 1 < args.length) {
+      parsed.agentModel = args[i + 1];
+      i++;
     } else if (arg === "--prompt-template" && i + 1 < args.length) {
       parsed.promptTemplatePath = args[i + 1];
       i++;
@@ -603,6 +617,7 @@ Usage:
 
 Common options:
   --adapter <name>           Adapter to use (default: from config)
+  --agent-model <model>      Model for the agent CLI (e.g. opus for Devin, o3 for Codex)
   --base-branch <name>       Base branch for worktrees and PRs (default: main)
   --merge-gate               Enable the merge gate between waves (default: true)
   --no-merge-gate            Disable the merge gate — PRs are left open for manual review
