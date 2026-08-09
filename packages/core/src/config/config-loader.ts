@@ -8,7 +8,7 @@ export type { OrchestratorConfig, TicketSourceConfig } from "@orchestrator/types
 const DEFAULTS: Config = {
   adapter: "devin",
   baseBranch: "main",
-  mergeGate: false,
+  mergeGate: true,
   plannerProvider: "openai",
   plannerModel: "gpt-4o",
   ticketSource: { kind: "github", ref: "" },

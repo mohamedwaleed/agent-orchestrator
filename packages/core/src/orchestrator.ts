@@ -8,6 +8,18 @@ import type { TicketSource } from "./ticket-source/ticket-source.js";
 import type { GitOperations } from "./execution/git-operations.js";
 
 /**
+ * Optional hooks for controlling the orchestrator's interactive behavior.
+ * In production these default to real stdin/console prompts. In tests they
+ * are injected with fakes.
+ */
+export interface OrchestratorOptions {
+  /** Called at the merge gate between waves. Returns true to merge, false to leave PRs open. */
+  mergeGatePrompt?: (wave: number, taskSummaries: string[]) => Promise<boolean>;
+  /** Called for each progress event during execution (wave start, task start, etc.). */
+  onProgress?: (message: string) => void;
+}
+
+/**
  * The Orchestrator — coordinates the full Run lifecycle:
  * Intake → Planning → Approval Gate → Execution → Completion → Intervention
  *
@@ -28,6 +40,7 @@ export class Orchestrator {
     gitOps: GitOperations,
     adapters: Adapter[],
     stateDbPath: string,
+    options: OrchestratorOptions = {},
   ) {
     this.stateManager = new RunStateManager(stateDbPath);
     this.planner = new Planner(config);
@@ -35,7 +48,9 @@ export class Orchestrator {
     for (const adapter of adapters) {
       this.adapterRegistry.register(adapter);
     }
-    this.waveExecutor = new WaveExecutor(this.adapterRegistry, this.stateManager, config, gitOps);
+    this.waveExecutor = new WaveExecutor(
+      this.adapterRegistry, this.stateManager, config, gitOps, options,
+    );
   }
 
   /**
@@ -63,11 +78,40 @@ export class Orchestrator {
   }
 
   /**
-   * Phase 4: Execution — run waves sequentially, parallel tasks within each wave.
-   * The user can attach to any running session at any time.
+   * Phase 4: Execution — run all remaining waves + merges sequentially.
+   * This is the convenience method for the `run` command. For user-driven
+   * execution, use executeWave + mergeWave instead.
    */
   async execute(runId: string): Promise<RunState> {
     return this.waveExecutor.execute(runId);
+  }
+
+  /**
+   * Execute tasks in a specific wave. Does NOT merge or advance to the next wave.
+   * Options:
+   *   - maxParallelism: limit concurrent sessions within the wave
+   *   - taskIds: run only specific tasks from the wave
+   */
+  async executeWave(runId: string, waveNum: number, options?: {
+    maxParallelism?: number;
+    taskIds?: string[];
+  }): Promise<RunState> {
+    return this.waveExecutor.executeWave(runId, waveNum, options);
+  }
+
+  /**
+   * Merge completed PRs from a specific wave. The user calls this after
+   * reviewing PRs on GitHub and deciding to merge.
+   */
+  async mergeWave(runId: string, waveNum: number): Promise<RunState> {
+    return this.waveExecutor.mergeWave(runId, waveNum);
+  }
+
+  /**
+   * List all persisted runs (for the `status` command).
+   */
+  listRuns(): RunState[] {
+    return this.stateManager.listRuns();
   }
 
   /**

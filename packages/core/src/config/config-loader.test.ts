@@ -35,7 +35,7 @@ describe("ConfigLoader", () => {
 
     expect(config.adapter).toBe("devin");
     expect(config.baseBranch).toBe("main");
-    expect(config.mergeGate).toBe(false);
+    expect(config.mergeGate).toBe(true);
     expect(config.plannerProvider).toBe("openai");
     expect(config.plannerModel).toBe("gpt-4o");
     expect(config.ticketSource).toEqual({ kind: "github", ref: "" });

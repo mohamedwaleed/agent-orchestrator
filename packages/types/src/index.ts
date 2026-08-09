@@ -68,6 +68,8 @@ export interface Task {
   prNumber?: number;
   /** PR URL once the PR has been created */
   prUrl?: string;
+  /** Reason the PR merge failed (set when status is "conflicted") */
+  conflictReason?: string;
   /** User modification messages logged during Attach (audit trail) */
   attachMessages: AttachMessage[];
 }

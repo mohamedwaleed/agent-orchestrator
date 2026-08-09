@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Ticket, Adapter, AdapterResult, InteractiveSession, OrchestratorConfig } from "@orchestrator/types";
 import { Orchestrator } from "./orchestrator.js";
 import type { GitOperations } from "./execution/git-operations.js";
@@ -53,6 +56,7 @@ class FakeGitOperations implements GitOperations {
   prUrl = "https://github.com/owner/repo/pull/1";
   prNumber = 1;
   mergeShouldFail = false;
+  mergeErrorMessage = "Merge conflict";
 
   async createWorktree(branchName: string, worktreePath: string, baseBranch: string): Promise<void> {
     this.calls.push({ method: "createWorktree", args: [branchName, worktreePath, baseBranch] });
@@ -73,7 +77,7 @@ class FakeGitOperations implements GitOperations {
 
   async mergePR(prUrl: string): Promise<void> {
     this.calls.push({ method: "mergePR", args: [prUrl] });
-    if (this.mergeShouldFail) throw new Error("Merge conflict");
+    if (this.mergeShouldFail) throw new Error(this.mergeErrorMessage);
   }
 
   async removeWorktree(worktreePath: string): Promise<void> {
@@ -121,7 +125,8 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     const ticketSource = new FakeTicketSource([ticket]);
     const adapter = new FakeAdapter();
     const gitOps = new FakeGitOperations();
-    const config = makeConfig();
+    // Explicitly disable merge gate for this tracer bullet test
+    const config = makeConfig({ mergeGate: false });
     const orchestrator = new Orchestrator(config, ticketSource, gitOps, [adapter], ":memory:");
 
     // Act — run the full lifecycle
@@ -174,9 +179,10 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     expect(pushCall!.args[1]).toBe("orchestrator/TICKET-001-add-hello-world-endpoint");
     expect(prCall!.args[3]).toBe("orchestrator/TICKET-001-add-hello-world-endpoint");
 
-    // Assert — the PR was merged (auto-merge, no merge gate)
+    // Assert — with mergeGate disabled, PR is created but NOT auto-merged
+    // (left open for human review)
     const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
-    expect(mergeCall).toBeDefined();
+    expect(mergeCall).toBeUndefined();
 
     // Assert — worktree was cleaned up
     const removeCall = gitOps.calls.find((c) => c.method === "removeWorktree");
@@ -208,7 +214,7 @@ describe("Orchestrator — single-ticket end-to-end (tracer bullet)", () => {
     };
 
     const gitOps = new FakeGitOperations();
-    const orchestrator = new Orchestrator(makeConfig(), ticketSource, gitOps, [failingAdapter], ":memory:");
+    const orchestrator = new Orchestrator(makeConfig({ mergeGate: false }), ticketSource, gitOps, [failingAdapter], ":memory:");
 
     const tickets = await orchestrator.intake();
     const plan = await orchestrator.plan(tickets);
@@ -253,7 +259,7 @@ describe("Orchestrator — parallel tasks in a single wave", () => {
 
     // Fake that detects concurrent createWorktree calls
     const gitOps = new SequentialDetectingGitOperations();
-    const orchestrator = new Orchestrator(makeConfig(), ticketSource, gitOps, [adapter], ":memory:");
+    const orchestrator = new Orchestrator(makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], ":memory:");
 
     const fetched = await orchestrator.intake();
     const plan = await orchestrator.plan(fetched);
@@ -265,6 +271,360 @@ describe("Orchestrator — parallel tasks in a single wave", () => {
     expect(gitOps.concurrentWorktreeError).toBeUndefined();
   });
 });
+
+describe("Orchestrator — merge gate", () => {
+  it("does not merge PRs when mergeGate is enabled and the user declines", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const config = makeConfig({ mergeGate: true });
+
+    // User declines the merge gate — PRs should stay open, not be merged
+    const orchestrator = new Orchestrator(
+      config, ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => false },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    const finalState = await orchestrator.execute(runState.id);
+
+    // PR was created but NOT merged
+    const prCall = gitOps.calls.find((c) => c.method === "createPR");
+    expect(prCall).toBeDefined();
+    const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
+    expect(mergeCall).toBeUndefined();
+
+    // Task is still completed (PR exists), just not merged
+    const task = finalState.tasks.find((t) => t.id === "TICKET-001");
+    expect(task!.status).toBe("completed");
+  });
+
+  it("merges PRs when mergeGate is enabled and the user approves", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const config = makeConfig({ mergeGate: true });
+
+    const orchestrator = new Orchestrator(
+      config, ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => true },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    await orchestrator.execute(runState.id);
+
+    const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
+    expect(mergeCall).toBeDefined();
+  });
+});
+
+describe("Orchestrator — conflict reporting", () => {
+  it("captures the merge error message and shows the PR URL for conflicted tasks", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    gitOps.mergeShouldFail = true;
+    gitOps.mergeErrorMessage = "Pull Request has merge conflicts (mergePullRequest)";
+
+    // mergeGate enabled + user approves → merge fails → conflicted
+    const orchestrator = new Orchestrator(
+      makeConfig({ mergeGate: true }), ticketSource, gitOps, [adapter], ":memory:",
+      { mergeGatePrompt: async () => true },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    const finalState = await orchestrator.execute(runState.id);
+
+    const task = finalState.tasks.find((t) => t.id === "TICKET-001");
+    expect(task!.status).toBe("conflicted");
+    expect(task!.conflictReason).toBe("Pull Request has merge conflicts (mergePullRequest)");
+    expect(task!.prUrl).toBe("https://github.com/owner/repo/pull/1");
+  });
+});
+
+describe("Orchestrator — execution progress logging", () => {
+  it("emits progress events for wave start, task start, task completion, and wave end", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+
+    const events: string[] = [];
+    const orchestrator = new Orchestrator(
+      makeConfig(), ticketSource, gitOps, [adapter], ":memory:",
+      { onProgress: (msg) => events.push(msg) },
+    );
+
+    const tickets = await orchestrator.intake();
+    const plan = await orchestrator.plan(tickets);
+    const runState = await orchestrator.approve(plan);
+    await orchestrator.execute(runState.id);
+
+    // Should have events for wave start, task start, task completion, PR creation
+    expect(events.some((e) => e.includes("Wave 0"))).toBe(true);
+    expect(events.some((e) => e.includes("TICKET-001") && e.includes("starting"))).toBe(true);
+    expect(events.some((e) => e.includes("TICKET-001") && e.includes("completed"))).toBe(true);
+    expect(events.some((e) => e.includes("PR"))).toBe(true);
+  });
+});
+
+describe("Orchestrator — user-driven execution model", () => {
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "orch-state-"));
+  });
+  afterEach(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("persists run state to disk so a new Orchestrator instance can load it", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    // First instance: plan and approve
+    const orch1 = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const tickets = await orch1.intake();
+    const plan = await orch1.plan(tickets);
+    const runState = await orch1.approve(plan);
+    const runId = runState.id;
+
+    // Second instance: load the same state file and verify the run exists
+    const orch2 = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const loaded = orch2.getRunState(runId);
+    expect(loaded).toBeDefined();
+    expect(loaded!.id).toBe(runId);
+    expect(loaded!.tasks).toHaveLength(1);
+    expect(loaded!.tasks[0].id).toBe("TICKET-001");
+  });
+
+  it("executeWave runs only the specified wave without auto-advancing", async () => {
+    // Two independent tickets (wave 0) + one dependent on both (wave 1)
+    const tickets = [
+      makeTicket({ id: "T1", title: "Task one" }),
+      makeTicket({ id: "T2", title: "Task two" }),
+      makeTicket({ id: "T3", title: "Task three", dependencies: ["T1", "T2"] }),
+    ];
+    const ticketSource = new FakeTicketSource(tickets);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const fetched = await orch.intake();
+    const plan = await orch.plan(fetched);
+    expect(plan.waves).toHaveLength(2);
+
+    const runState = await orch.approve(plan);
+
+    // Execute only wave 0
+    const stateAfterWave0 = await orch.executeWave(runState.id, 0);
+    expect(stateAfterWave0.currentWave).toBe(0); // didn't auto-advance
+
+    // Wave 0 tasks completed, wave 1 task still pending
+    const w0Tasks = stateAfterWave0.tasks.filter((t) => t.wave === 0);
+    const w1Tasks = stateAfterWave0.tasks.filter((t) => t.wave === 1);
+    expect(w0Tasks.every((t) => t.status === "completed")).toBe(true);
+    expect(w1Tasks.every((t) => t.status === "pending")).toBe(true);
+
+    // No merge should have happened (executeWave doesn't merge)
+    const mergeCall = gitOps.calls.find((c) => c.method === "mergePR");
+    expect(mergeCall).toBeUndefined();
+  });
+
+  it("mergeWave merges completed PRs from a specific wave", async () => {
+    const ticket = makeTicket();
+    const ticketSource = new FakeTicketSource([ticket]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    // mergeGate enabled with auto-approve so mergeWave actually merges
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: true }), ticketSource, gitOps, [adapter], statePath,
+      { mergeGatePrompt: async () => true },
+    );
+    const tickets = await orch.intake();
+    const plan = await orch.plan(tickets);
+    const runState = await orch.approve(plan);
+
+    // Execute wave 0 (creates PR but doesn't merge)
+    await orch.executeWave(runState.id, 0);
+    expect(gitOps.calls.find((c) => c.method === "mergePR")).toBeUndefined();
+
+    // Now merge wave 0
+    await orch.mergeWave(runState.id, 0);
+    expect(gitOps.calls.find((c) => c.method === "mergePR")).toBeDefined();
+  });
+
+  it("limits concurrent sessions to maxParallelism", async () => {
+    // 4 independent tasks in wave 0
+    const tickets = [
+      makeTicket({ id: "T1", title: "Task one" }),
+      makeTicket({ id: "T2", title: "Task two" }),
+      makeTicket({ id: "T3", title: "Task three" }),
+      makeTicket({ id: "T4", title: "Task four" }),
+    ];
+    const ticketSource = new FakeTicketSource(tickets);
+    const adapter = new ConcurrencyTrackingAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const fetched = await orch.intake();
+    const plan = await orch.plan(fetched);
+    const runState = await orch.approve(plan);
+
+    // Execute wave 0 with maxParallelism=2
+    await orch.executeWave(runState.id, 0, { maxParallelism: 2 });
+
+    // At no point should more than 2 sessions have been active simultaneously
+    expect(adapter.maxConcurrent).toBeLessThanOrEqual(2);
+    expect(adapter.maxConcurrent).toBe(2);
+  });
+
+  it("executeWave with taskIds runs only the specified tasks", async () => {
+    // 3 independent tasks in wave 0
+    const tickets = [
+      makeTicket({ id: "T1", title: "Task one" }),
+      makeTicket({ id: "T2", title: "Task two" }),
+      makeTicket({ id: "T3", title: "Task three" }),
+    ];
+    const ticketSource = new FakeTicketSource(tickets);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const fetched = await orch.intake();
+    const plan = await orch.plan(fetched);
+    const runState = await orch.approve(plan);
+
+    // Execute only T1 and T3 from wave 0
+    const state = await orch.executeWave(runState.id, 0, { taskIds: ["T1", "T3"] });
+
+    const t1 = state.tasks.find((t) => t.id === "T1");
+    const t2 = state.tasks.find((t) => t.id === "T2");
+    const t3 = state.tasks.find((t) => t.id === "T3");
+    expect(t1!.status).toBe("completed");
+    expect(t3!.status).toBe("completed");
+    expect(t2!.status).toBe("pending"); // not selected, still pending
+  });
+
+  it("executeWave skips tasks that are already completed", async () => {
+    const tickets = [
+      makeTicket({ id: "T1", title: "Task one" }),
+      makeTicket({ id: "T2", title: "Task two" }),
+    ];
+    const ticketSource = new FakeTicketSource(tickets);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const fetched = await orch.intake();
+    const plan = await orch.plan(fetched);
+    const runState = await orch.approve(plan);
+
+    // Run only T1 first
+    await orch.executeWave(runState.id, 0, { taskIds: ["T1"] });
+
+    // Run the whole wave — T1 should be skipped, T2 should run
+    const startSessionCount = gitOps.calls.filter((c) => c.method === "createWorktree").length;
+    await orch.executeWave(runState.id, 0);
+    const endSessionCount = gitOps.calls.filter((c) => c.method === "createWorktree").length;
+
+    // Only one new worktree should have been created (for T2)
+    expect(endSessionCount - startSessionCount).toBe(1);
+
+    const state = orch.getRunState(runState.id);
+    expect(state!.tasks.every((t) => t.status === "completed")).toBe(true);
+  });
+
+  it("listRuns returns all persisted runs", async () => {
+    const ticketSource = new FakeTicketSource([makeTicket()]);
+    const adapter = new FakeAdapter();
+    const gitOps = new FakeGitOperations();
+    const statePath = join(stateDir, "state.json");
+
+    const orch = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const tickets = await orch.intake();
+    const plan = await orch.plan(tickets);
+    const runState1 = await orch.approve(plan);
+
+    // Create a second run
+    const tickets2 = await orch.intake();
+    const plan2 = await orch.plan(tickets2);
+    const runState2 = await orch.approve(plan2);
+
+    // New instance loads from disk
+    const orch2 = new Orchestrator(
+      makeConfig({ mergeGate: false }), ticketSource, gitOps, [adapter], statePath,
+    );
+    const runs = orch2.listRuns();
+    expect(runs.length).toBeGreaterThanOrEqual(2);
+    expect(runs.some((r) => r.id === runState1.id)).toBe(true);
+    expect(runs.some((r) => r.id === runState2.id)).toBe(true);
+  });
+});
+
+/**
+ * Adapter that tracks how many sessions are active concurrently.
+ * Used to verify maxParallelism enforcement.
+ */
+class ConcurrencyTrackingAdapter implements Adapter {
+  readonly name = "stub";
+  private active = 0;
+  maxConcurrent = 0;
+
+  async startSession(_worktreePath: string, _prompt: string): Promise<string> {
+    this.active++;
+    this.maxConcurrent = Math.max(this.maxConcurrent, this.active);
+    return `session-${Date.now()}-${Math.random()}`;
+  }
+
+  async waitForCompletion(_sessionId: string): Promise<AdapterResult> {
+    // Simulate some work time so concurrency is observable
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    this.active--;
+    return {
+      success: true,
+      exitCode: 0,
+      output: "ok",
+      lastMessage: "done",
+    };
+  }
+
+  async attach(_sessionId: string): Promise<InteractiveSession> {
+    throw new Error("Not supported");
+  }
+}
 
 /**
  * FakeGitOperations variant that detects concurrent createWorktree calls.
