@@ -1,0 +1,47 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect, and what actually happened?
+      placeholder: |
+        Expected:
+        Actual:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) you ran and any relevant input (ticket file, config).
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste the relevant console output. No screenshots of text.
+      render: shell
+  - type: input
+    id: adapter
+    attributes:
+      label: Adapter / agent CLI
+      description: Which adapter and agent CLI were you using? (e.g. devin, codex)
+      placeholder: devin (Devin CLI)
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, pnpm version.
+      placeholder: |
+        OS: macOS 14
+        Node: 20.x
+        pnpm: 9.x
+    validations:
+      required: true

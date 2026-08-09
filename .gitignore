@@ -22,3 +22,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Local agent/tool config (machine-specific permissions, not shared)
+.devin/config.local.json
