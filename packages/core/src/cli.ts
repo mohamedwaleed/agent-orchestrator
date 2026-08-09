@@ -5,6 +5,7 @@ import type { GitOperations } from "./execution/git-operations.js";
 import { LocalTicketSource } from "./ticket-source/local-source.js";
 import { GitHubTicketSource } from "./ticket-source/github-source.js";
 import { StubAdapter } from "./adapter-registry/stub-adapter.js";
+import { CodexAdapter } from "@orchestrator/adapter-codex";
 import { ConfigLoader } from "./config/config-loader.js";
 import type { OrchestratorConfig } from "@orchestrator/types";
 
@@ -90,8 +91,10 @@ async function runCommand(args: string[]): Promise<void> {
     ticketSource = new GitHubTicketSource(mergedConfig.ticketSource.ref, mergedConfig.ticketSource.filter);
   }
 
-  // For the tracer bullet, use the stub adapter
-  const adapters = [new StubAdapter()];
+  // Register built-in adapters. The stub adapter is used for testing and the
+  // tracer bullet; the codex adapter spawns the real Codex CLI. External
+  // adapters are discovered via auto-discovery (AdapterRegistry.autoDiscover).
+  const adapters = [new StubAdapter(), new CodexAdapter()];
   const gitOps: GitOperations = parsed.noPr
     ? new NoPrGitOperations(new RealGitOperations())
     : new RealGitOperations();

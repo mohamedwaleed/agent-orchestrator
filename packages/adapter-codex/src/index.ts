@@ -5,11 +5,32 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 /**
+ * Options for constructing a CodexAdapter.
+ */
+export interface CodexAdapterOptions {
+  /**
+   * Path to the `codex` binary. Defaults to `"codex"` (resolved from PATH).
+   * Tests inject a fake CLI path here so no real Codex CLI is spawned.
+   */
+  binary?: string;
+}
+
+interface SessionState {
+  child: ChildProcess;
+  /** Resolves with the process exit code once the child exits. */
+  exitPromise: Promise<number>;
+  output: string;
+  lastMessageFile: string;
+  /** Codex's native session ID, captured from JSONL output if present. */
+  codexSessionId?: string;
+}
+
+/**
  * CodexAdapter — bridges the orchestrator to the Codex CLI.
  *
  * Interfaces via CLI subprocess:
- * - start_session: `codex exec <prompt> -C <worktree> --json --dangerously-bypass-approvals-and-sandbox`
- * - wait_for_completion: waits for process exit, parses JSONL output
+ * - startSession: `codex exec <prompt> -C <worktree> --json --dangerously-bypass-approvals-and-sandbox -o <last-message-file>`
+ * - waitForCompletion: waits for process exit, reads the last-message file, parses JSONL output
  * - attach: `codex exec resume <session_id>` (interactive resume)
  *
  * Agents always run in automatic accept mode — no approval prompts.
@@ -18,9 +39,15 @@ import { tmpdir } from "node:os";
 export class CodexAdapter implements Adapter {
   readonly name = "codex";
 
-  private sessions = new Map<string, ChildProcess>();
-  private outputs = new Map<string, string>();
-  private lastMessageFiles = new Map<string, string>();
+  private readonly binary: string;
+  private sessions = new Map<string, SessionState>();
+  /** Maps orchestrator session IDs to Codex native session IDs. Persists across
+   * waitForCompletion so attach can resume after a session completes. */
+  private codexSessionIds = new Map<string, string>();
+
+  constructor(options: CodexAdapterOptions = {}) {
+    this.binary = options.binary ?? "codex";
+  }
 
   async startSession(worktreePath: string, prompt: string): Promise<string> {
     const sessionId = `codex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -28,10 +55,9 @@ export class CodexAdapter implements Adapter {
     // Create a temp file for the last message output
     const tempDir = await mkdtemp(join(tmpdir(), "orchestrator-codex-"));
     const lastMessageFile = join(tempDir, "last-message.txt");
-    this.lastMessageFiles.set(sessionId, lastMessageFile);
 
     const child = spawn(
-      "codex",
+      this.binary,
       [
         "exec",
         prompt,
@@ -46,59 +72,114 @@ export class CodexAdapter implements Adapter {
       },
     );
 
-    this.sessions.set(sessionId, child);
-    this.outputs.set(sessionId, "");
+    // Capture the exit promise up front so waitForCompletion is robust even if
+    // the process exits before waitForCompletion attaches its listener.
+    const exitPromise = new Promise<number>((resolve) => {
+      child.on("exit", (code: number | null) => resolve(code ?? 1));
+    });
+
+    const session: SessionState = { child, exitPromise, output: "", lastMessageFile };
+    this.sessions.set(sessionId, session);
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      this.outputs.set(sessionId, (this.outputs.get(sessionId) ?? "") + chunk.toString());
+      const text = chunk.toString();
+      session.output += text;
+      this.captureSessionId(session, text);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      this.outputs.set(sessionId, (this.outputs.get(sessionId) ?? "") + chunk.toString());
+      session.output += chunk.toString();
     });
 
     return sessionId;
   }
 
   async waitForCompletion(sessionId: string): Promise<AdapterResult> {
-    const child = this.sessions.get(sessionId);
-    if (!child) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    return new Promise<AdapterResult>((resolve) => {
-      child.on("exit", async (code: number | null) => {
-        const output = this.outputs.get(sessionId) ?? "";
-        const exitCode = code ?? 1;
+    const exitCode = await session.exitPromise;
 
-        // Read the last message from the output file
-        let lastMessage = "";
-        const lastMessageFile = this.lastMessageFiles.get(sessionId);
-        if (lastMessageFile) {
-          try {
-            lastMessage = await readFile(lastMessageFile, "utf-8");
-          } catch {
-            lastMessage = this.extractLastMessage(output);
-          }
-        }
+    // Read the last message from the -o output file; fall back to JSONL parsing.
+    let lastMessage = "";
+    try {
+      lastMessage = await readFile(session.lastMessageFile, "utf-8");
+    } catch {
+      lastMessage = this.extractLastMessage(session.output);
+    }
 
-        resolve({
-          success: exitCode === 0,
-          exitCode,
-          output,
-          lastMessage: lastMessage.trim(),
-        });
+    const result: AdapterResult = {
+      success: exitCode === 0,
+      exitCode,
+      output: session.output,
+      lastMessage: lastMessage.trim(),
+    };
 
-        this.sessions.delete(sessionId);
-        this.outputs.delete(sessionId);
-        this.lastMessageFiles.delete(sessionId);
-      });
-    });
+    // Persist the Codex native session ID so attach can resume after completion.
+    if (session.codexSessionId) {
+      this.codexSessionIds.set(sessionId, session.codexSessionId);
+    }
+
+    this.sessions.delete(sessionId);
+    return result;
   }
 
-  async attach(_sessionId: string): Promise<InteractiveSession> {
-    // Codex resume: `codex exec resume <session_id> <prompt>` — interactive mode
-    // TODO: implement interactive session with stdin/stdout piping
-    throw new Error("Attach not yet implemented for Codex adapter");
+  async attach(sessionId: string): Promise<InteractiveSession> {
+    // Resume using Codex's native session ID if captured from JSONL output;
+    // fall back to the orchestrator-generated ID for backward compatibility.
+    const resumeId = this.codexSessionIds.get(sessionId) ?? sessionId;
+    const child = spawn(
+      this.binary,
+      ["exec", "resume", resumeId],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+
+    const outputCallbacks = new Set<(chunk: string) => void>();
+    child.stdout?.on("data", (chunk: Buffer) => {
+      for (const cb of outputCallbacks) cb(chunk.toString());
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      for (const cb of outputCallbacks) cb(chunk.toString());
+    });
+
+    return {
+      async send(message: string): Promise<void> {
+        child.stdin?.write(message + "\n");
+      },
+      onOutput(callback: (chunk: string) => void): void {
+        outputCallbacks.add(callback);
+      },
+      async detach(): Promise<boolean> {
+        child.stdin?.end();
+        child.kill();
+        // Whether the issue was resolved is determined by the orchestrator
+        // (it asks the user on detach); the adapter only tears down the pipe.
+        return false;
+      },
+    };
+  }
+
+  /**
+   * Scan a stdout chunk for a JSONL session event and capture the native
+   * Codex session ID. Codex emits a session event early in its JSONL output
+   * with the session ID needed for `codex exec resume`.
+   */
+  private captureSessionId(session: SessionState, chunk: string): void {
+    if (session.codexSessionId) return; // already captured
+    for (const line of chunk.split("\n")) {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "session" && event.session_id) {
+          session.codexSessionId = event.session_id;
+          return;
+        }
+      } catch {
+        continue;
+      }
+    }
   }
 
   /**

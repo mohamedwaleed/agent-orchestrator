@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@orchestrator/adapter-codex": "workspace:*",
     "@orchestrator/types": "workspace:*",
     "yaml": "^2.9.0"
   },

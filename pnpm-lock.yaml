@@ -27,6 +27,9 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)
 
   packages/adapter-devin:
     dependencies:
@@ -40,6 +43,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@orchestrator/adapter-codex':
+        specifier: workspace:*
+        version: link:../adapter-codex
       '@orchestrator/types':
         specifier: workspace:*
         version: link:../types
