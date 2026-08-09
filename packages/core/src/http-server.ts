@@ -9,6 +9,12 @@ export function createHttpServer(): Server {
       return;
     }
 
+    if (request.method === "GET" && request.url === "/goodbye") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ message: "goodbye world" }));
+      return;
+    }
+
     response.writeHead(404);
     response.end();
   });
