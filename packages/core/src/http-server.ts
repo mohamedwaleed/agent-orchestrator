@@ -1,5 +1,4 @@
 import { createServer, type Server } from "node:http";
-import { products } from "./product-store.js";
 import { users } from "./store.js";
 
 /** Creates the HTTP server used to expose the orchestrator's API. */
@@ -32,23 +31,6 @@ export function createHttpServer(): Server {
     if (request.method === "GET" && request.url === "/users") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(users));
-      return;
-    }
-
-    if (request.method === "GET" && request.url === "/products") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(products));
-      return;
-    }
-
-    if (request.method === "GET" && request.url === "/dashboard") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        userCount: users.length,
-        productCount: products.length,
-        users,
-        products,
-      }));
       return;
     }
 
