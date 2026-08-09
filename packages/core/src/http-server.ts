@@ -21,6 +21,12 @@ export function createHttpServer(): Server {
       return;
     }
 
+    if (request.method === "GET" && request.url === "/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok", version: "1.0.0" }));
+      return;
+    }
+
     response.writeHead(404);
     response.end();
   });
