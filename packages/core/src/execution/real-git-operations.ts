@@ -33,14 +33,34 @@ export class RealGitOperations implements GitOperations {
   }
 
   async createPR(title: string, body: string, baseBranch: string, headBranch: string): Promise<{ url: string; number: number }> {
+    try {
+      const { stdout } = await exec(
+        `gh pr create --title ${shellQuote(title)} --body ${shellQuote(body)} --base ${baseBranch} --head ${headBranch}`,
+      );
+      const url = stdout.trim();
+      // Extract PR number from URL (e.g., https://github.com/owner/repo/pull/42)
+      const match = url.match(/\/pull\/(\d+)$/);
+      const number = match ? parseInt(match[1], 10) : 0;
+      return { url, number };
+    } catch (err) {
+      // A PR for this branch may already exist (e.g. from a previous run).
+      // Fall back to viewing the existing PR so re-runs are idempotent.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("already exists")) throw err;
+      return await this.viewExistingPR(headBranch);
+    }
+  }
+
+  /**
+   * Look up an existing PR for a head branch via `gh pr view`.
+   * Used when `gh pr create` reports a PR already exists.
+   */
+  private async viewExistingPR(headBranch: string): Promise<{ url: string; number: number }> {
     const { stdout } = await exec(
-      `gh pr create --title ${shellQuote(title)} --body ${shellQuote(body)} --base ${baseBranch} --head ${headBranch}`,
+      `gh pr view ${headBranch} --json url,number`,
     );
-    const url = stdout.trim();
-    // Extract PR number from URL (e.g., https://github.com/owner/repo/pull/42)
-    const match = url.match(/\/pull\/(\d+)$/);
-    const number = match ? parseInt(match[1], 10) : 0;
-    return { url, number };
+    const pr = JSON.parse(stdout) as { url: string; number: number };
+    return { url: pr.url, number: pr.number };
   }
 
   async mergePR(prUrl: string): Promise<void> {

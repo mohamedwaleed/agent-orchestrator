@@ -179,7 +179,8 @@ export class WaveExecutor {
 
   private async runSession(runId: string, task: Task, worktreePath: string): Promise<void> {
     const adapter = this.adapterRegistry.getAdapter(task.adapter);
-    this.onProgress(`  [${task.id}] starting agent session (${task.adapter})`);
+    const modelInfo = adapter.model ? ` (${task.adapter}, model: ${adapter.model})` : ` (${task.adapter})`;
+    this.onProgress(`  [${task.id}] starting agent session${modelInfo}`);
     const sessionId = await adapter.startSession(worktreePath, task.prompt);
     this.stateManager.updateTask(runId, task.id, { sessionId });
 

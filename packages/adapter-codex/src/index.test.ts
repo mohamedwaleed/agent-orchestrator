@@ -55,6 +55,25 @@ describe("CodexAdapter", () => {
     expect(args[args.indexOf("-o") + 1].length).toBeGreaterThan(0);
   });
 
+  it("passes -m <model> when a model is configured", async () => {
+    const adapter = new CodexAdapter({ binary: fakeCli, model: "o3" });
+    const sessionId = await adapter.startSession(worktree, "do work");
+    await adapter.waitForCompletion(sessionId);
+
+    const args = JSON.parse(await readFile(argvFile, "utf-8")) as string[];
+    expect(args).toContain("-m");
+    expect(args[args.indexOf("-m") + 1]).toBe("o3");
+  });
+
+  it("omits -m when no model is configured", async () => {
+    const adapter = new CodexAdapter({ binary: fakeCli });
+    const sessionId = await adapter.startSession(worktree, "do work");
+    await adapter.waitForCompletion(sessionId);
+
+    const args = JSON.parse(await readFile(argvFile, "utf-8")) as string[];
+    expect(args).not.toContain("-m");
+  });
+
   it("passes an absolute worktree path to -C even when given a relative path", async () => {
     // The wave executor uses relative worktree paths (e.g. .orchestrator/worktrees/TASK-1).
     // Codex resolves -C relative to its own cwd, so a relative -C would point to a
