@@ -271,7 +271,6 @@ async function statusCommand(args: string[]): Promise<void> {
 async function executeWaveCommand(args: string[]): Promise<void> {
   const parsed = parseWaveArgs(args);
   const runId = resolveRunId(parsed);
-  const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
   const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
@@ -294,7 +293,6 @@ async function executeWaveCommand(args: string[]): Promise<void> {
 async function mergeWaveCommand(args: string[]): Promise<void> {
   const parsed = parseWaveArgs(args);
   const runId = resolveRunId(parsed);
-  const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
   const orchestrator = createOrchestrator(config, false, parsed.agentModel);
 
@@ -313,7 +311,6 @@ async function mergeWaveCommand(args: string[]): Promise<void> {
 async function continueCommand(args: string[]): Promise<void> {
   const parsed = parseContinueArgs(args);
   const runId = resolveRunId(parsed);
-  const configLoader = new ConfigLoader();
   const config = loadConfig(parsed);
   const orchestrator = createOrchestrator(config, parsed.noPr ?? false, parsed.agentModel);
 
