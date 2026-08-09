@@ -122,6 +122,9 @@ export interface Adapter {
   /** Unique adapter name (e.g., "devin", "codex") */
   name: string;
 
+  /** AI model the adapter passes to the agent CLI, if configured. */
+  readonly model?: string;
+
   /**
    * Start an agent session in the given worktree with the task prompt.
    * The agent must run in automatic accept mode — no approval prompts.

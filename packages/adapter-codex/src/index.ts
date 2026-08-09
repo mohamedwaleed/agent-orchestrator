@@ -45,7 +45,7 @@ export class CodexAdapter implements Adapter {
   readonly name = "codex";
 
   private readonly binary: string;
-  private readonly model?: string;
+  readonly model?: string;
   private sessions = new Map<string, SessionState>();
   /** Maps orchestrator session IDs to Codex native session IDs. Persists across
    * waitForCompletion so attach can resume after a session completes. */

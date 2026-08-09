@@ -59,7 +59,7 @@ export class DevinAdapter implements Adapter {
   readonly name = "devin";
 
   private readonly binary: string;
-  private readonly model?: string;
+  readonly model?: string;
   private sessions = new Map<string, SessionState>();
   /** Maps orchestrator session IDs to Devin native session IDs. Persists across
    * waitForCompletion so attach can resume after a session completes. */
