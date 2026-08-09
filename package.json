@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @orchestrator/types build && pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"
   },
